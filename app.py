@@ -1,6 +1,5 @@
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from flask_sqlalchemy import SQLAlchemy
-from werkzeug.security import generate_password_hash, check_password_hash
 import os
 from datetime import datetime, timedelta
 import uuid
@@ -8,8 +7,8 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from sqlalchemy.exc import IntegrityError
-from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import hashlib
 
 load_dotenv()
 
@@ -23,12 +22,18 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     usuario = db.Column(db.String(80), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
-    senha = db.Column(db.String(255), nullable=False)
+    senha = db.Column(db.String(64), nullable=False)
     reset_token = db.Column(db.String(100), unique=True, nullable=True)
     reset_token_expiracao = db.Column(db.DateTime, nullable=True)
     tentativas = db.Column(db.Integer, default=0)
     ultima_tentativa = db.Column(db.DateTime, nullable=True)
-    
+
+def generate_password_hash(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def check_password_hash(hashed_password, password):
+    return hashed_password == generate_password_hash(password)
+
 @app.route('/')
 def home():
     return render_template('home.html')
@@ -39,7 +44,7 @@ def register():
         usuario = request.form['usuario']
         email = request.form['email']
         senha = request.form['senha']
-        hashed_senha = generate_password_hash(senha, method='pbkdf2:sha256')
+        hashed_senha = generate_password_hash(senha)
         
         new_user = User(usuario=usuario, email=email, senha=hashed_senha)
         try:
@@ -90,14 +95,12 @@ def forgot_password():
         user = User.query.filter_by(email=email).first()
         
         if user:
-            # verifica se o usuário está bloqueado
             if user.tentativas >= 5 and user.ultima_tentativa:
                 time_diff = datetime.utcnow() - user.ultima_tentativa
                 if time_diff < timedelta(minutes=15):
                     flash('Muitas tentativas. Tente novamente em 15 minutos.', 'error')
                     return redirect(url_for('login'))
                 else:
-                    # reseta o contador após 15 minutos
                     user.tentativas = 0
                     user.ultima_tentativa = None
             
@@ -119,7 +122,6 @@ def reset_password(token):
     user = User.query.filter_by(reset_token=token).first()
     
     if user is None or (user.reset_token_expiracao is not None and user.reset_token_expiracao < datetime.utcnow()):   
-        # incrementa o contador de tentativas falhas
         if user:
             user.tentativas += 1
             user.ultima_tentativa = datetime.utcnow()
@@ -130,10 +132,10 @@ def reset_password(token):
     
     if request.method == 'POST':
         new_senha = request.form['senha']
-        user.senha = generate_password_hash(new_senha, method='pbkdf2:sha256')
+        user.senha = generate_password_hash(new_senha)
         user.reset_token = None
         user.reset_token_expiracao = None
-        user.tentativas = 0  # Reseta o contador após sucesso
+        user.tentativas = 0
         user.ultima_tentativa = None
         db.session.commit()
         
@@ -153,7 +155,6 @@ def send_reset_email(email, reset_link):
     message["To"] = email
     message["Subject"] = "Redefinição de senha"
 
-    # corpo email
     body = f"""
     Você solicitou a redefinição de sua senha.
     Clique no link abaixo para redefinir sua senha:
@@ -164,7 +165,6 @@ def send_reset_email(email, reset_link):
     """
     message.attach(MIMEText(body, "plain"))
 
-    # envio do email
     with smtplib.SMTP(smtp_server, smtp_port) as server:
         server.starttls()
         server.login(sender_email, sender_senha)
